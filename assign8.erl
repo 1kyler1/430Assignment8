@@ -59,9 +59,84 @@ extend_env(Params, Vals, Env)
         false -> interp_error(Params, io_lib:format("Parameter and argument length mismatch: ~p vs ~p", [Params, Vals]))
       end.
 
+%% Primatives
+
+%% expect_num
+expect_num({numV, N}, _) ->
+    N;
+expect_num(V, Ctx) ->
+    interp_error(Ctx,
+        io_lib:format("expected a number, got ~p", [V])).
+
+%% checks if nums, bools and stringd are euqal, if yes return true in not return false
+value_equal({numV, A}, {numV, B}) -> A =:= B;
+value_equal({boolV, A}, {boolV, B}) -> A =:= B;
+value_equal({strV, A}, {strV, B}) -> A =:= B;
+value_equal(_, _) -> false.
+
+%% applys the primitive operations for each value and errors if the arguments are not correct
+apply_prim(add, [A, B]) ->
+    {numV, expect_num(A, add) + expect_num(B, add)};
+apply_prim(sub, [A, B]) ->
+    {numV, expect_num(A, sub) - expect_num(B, sub)};
+apply_prim(mul, [A, B]) ->
+    {numV, expect_num(A, mul) * expect_num(B, mul)};
+apply_prim('div', [A, B]) ->
+    Den = expect_num(B, 'div'),
+    case Den of
+        0 -> interp_error('div', "division by zero");
+        _ -> {numV, expect_num(A, 'div') / Den}
+    end;
+apply_prim(leq, [A, B]) ->
+    {boolV, expect_num(A, leq) =< expect_num(B, leq)};
+apply_prim(equal, [A, B]) ->
+    {boolV, value_equal(A, B)};
+apply_prim(error, [{strV, Msg}]) ->
+    error({user_error, Msg});
+apply_prim(error, _) ->
+    error({user_error, "error expects a string"});
+apply_prim(Name, Args) ->
+    interp_error(Name,
+        io_lib:format("wrong arity or bad arguments: ~p", [Args])).
+
+%% make_prim wrapper
+make_prim(Name, Arity) ->
+    primV(Name, Arity,
+        fun(Args) ->
+            case length(Args) =:= Arity of
+                true -> apply_prim(Name, Args);
+                false -> interp_error(Name, "wrong arity")
+            end
+        end).
+
+%% Top-Level Environment
+top_env() ->
+    [
+        {add,   make_prim(add, 2)},
+        {sub,   make_prim(sub, 2)},
+        {mul,   make_prim(mul, 2)},
+        {'div', make_prim('div', 2)},
+        {leq,   make_prim(leq, 2)},
+        {equal, make_prim(equal, 2)},
+        {error, make_prim(error, 1)},
+        {true,  boolV(true)},
+        {false, boolV(false)}
+    ].
+
+%% Serialization
+serialize({numV, N}) ->
+    lists:flatten(io_lib:format("~p", [N]));
+serialize({boolV, true}) -> "true";
+serialize({boolV, false}) -> "false";
+serialize({strV, Bin}) when is_binary(Bin) ->
+    lists:flatten(io_lib:format("\"~s\"", [binary_to_list(Bin)]));
+serialize({cloV, _, _, _}) ->
+    "#<procedure>";
+serialize({primV, _, _, _}) ->
+    "#<primop>".
 
 
-%% Small environment unit tests (EUnit)
+%% EUnit Tests 
 
 lookup_finds_test() ->
     Env = [{x, numV(42)}, {y, boolV(true)}],
@@ -143,3 +218,90 @@ value_construction_test() ->
 
     PRIMV = primV('add', 2, fun(A, B) -> A + B end),
     ?assertMatch({primV, 'add', 2, _}, PRIMV).
+
+%% expect-num tests
+expect_num_success_test() ->
+    10 = expect_num(numV(10), test_context).
+
+expect_num_failure_test() ->
+    ?assertError(_, expect_num(boolV(true), test_context)).
+
+%% value_equal tests
+value_equal_numbers_test() ->
+    true  = value_equal(numV(3), numV(3)),
+    false = value_equal(numV(3), numV(4)).
+
+value_equal_booleans_test() ->
+    true  = value_equal(boolV(true), boolV(true)),
+    false = value_equal(boolV(true), boolV(false)).
+
+value_equal_strings_test() ->
+    true  = value_equal(strV("hello"), strV("hello")),
+    false = value_equal(strV("hello"), strV("world")).
+
+value_equal_mixed_types_test() ->
+    false = value_equal(numV(3), boolV(true)),
+    false = value_equal(strV("3"), numV(3)),
+    false = value_equal(cloV([], numC(1), []),
+                        cloV([], numC(1), [])).
+
+%% apply_prim tests
+apply_prim_add_test() ->
+    {numV, 3} = apply_prim(add, [numV(1), numV(2)]).
+
+apply_prim_sub_test() ->
+    {numV, 1} = apply_prim(sub, [numV(3), numV(2)]).
+
+apply_prim_mul_test() ->
+    {numV, 6} = apply_prim(mul, [numV(2), numV(3)]).
+
+apply_prim_div_test() ->
+    {numV, 2.0} = apply_prim('div', [numV(4), numV(2)]).
+
+apply_prim_leq_test() ->
+    {boolV, true}  = apply_prim(leq, [numV(2), numV(3)]),
+    {boolV, false} = apply_prim(leq, [numV(5), numV(3)]).
+
+apply_prim_equal_test() ->
+    {boolV, true}  = apply_prim(equal, [numV(5), numV(5)]),
+    {boolV, false} = apply_prim(equal, [numV(5), numV(6)]).
+
+apply_prim_error_test() ->
+    ?assertError(_, apply_prim(error, [strV("boom")])),
+    ?assertError(_, apply_prim(error, [numV(10)])).
+
+%% make_prim tests
+make_prim_correct_arity_test() ->
+    {primV, add, 2, Fun} = make_prim(add, 2),
+    {numV, 7} = Fun([numV(3), numV(4)]).
+
+make_prim_wrong_arity_test() ->
+    {primV, add, 2, Fun} = make_prim(add, 2),
+    ?assertError(_, Fun([numV(3)])).
+
+%% top_env tests
+top_env_contains_add_test() ->
+    Env = top_env(),
+    {add, {primV, add, 2, _}} = lists:keyfind(add, 1, Env).
+
+top_env_contains_boolean_test() ->
+    Env = top_env(),
+    {true,  {boolV, true}}  = lists:keyfind(true, 1, Env),
+    {false, {boolV, false}} = lists:keyfind(false, 1, Env).
+
+%% serialize tests
+serialize_number_test() ->
+    "42" = serialize({numV, 42}).
+
+serialize_boolean_test() ->
+    "true"  = serialize({boolV, true}),
+    "false" = serialize({boolV, false}).
+
+serialize_string_test() ->
+    "\"hello\"" = serialize(strV("hello")).
+
+serialize_closure_test() ->
+    "#<procedure>" = serialize(cloV([], numC(1), [])).
+
+serialize_primitive_test() ->
+    "#<primop>" = serialize(make_prim(add, 2)).
