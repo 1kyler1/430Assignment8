@@ -41,6 +41,53 @@ primV(Name, Arity, Impl) when is_atom(Name), is_integer(Arity), Arity >= 0, is_f
 
 interp_error(Ctx, Msg) -> error({szmx_interp_error, Ctx, Msg}).
 
+%% Part 3: The Interpreter
+
+interp({numC, N}, _Env) when is_number(N) ->
+    numV(N);
+interp({strC, Bin}, _Env) when is_binary(Bin) ->
+    strV(Bin);
+interp({idC, Name}, Env) when is_atom(Name), is_list(Env) ->
+    lookup(Name, Env);
+
+interp({ifC, TestE, ThenE, ElseE}, Env) ->
+    case interp(TestE, Env) of
+        {boolV, true}  -> interp(ThenE, Env);
+        {boolV, false} -> interp(ElseE, Env);
+        V -> interp_error({ifC, TestE, ThenE, ElseE},
+                          io_lib:format("if expects a boolean, got ~p", [V]))
+    end;
+
+interp({lamC, Params, Body}, Env) when is_list(Params), is_tuple(Body), is_list(Env) ->
+    cloV(Params, Body, Env);
+
+interp({appC, FnE, ArgEs}, Env) when is_tuple(FnE), is_list(ArgEs), is_list(Env) ->
+    FnV = interp(FnE, Env),
+    ArgVs = [interp(A, Env) || A <- ArgEs],
+    apply_value(FnV, ArgVs, {appC, FnE, ArgEs});
+
+interp(Expr, _Env) ->
+    interp_error(Expr, io_lib:format("unknown expression form: ~p", [Expr])).
+
+apply_value({primV, _Name, Arity, Impl}, Args, Ctx)
+  when is_integer(Arity), Arity >= 0, is_function(Impl) ->
+    case length(Args) =:= Arity of
+        true  -> Impl(Args);
+        false -> interp_error(Ctx, "wrong arity")
+    end;
+apply_value({cloV, Params, Body, CloEnv}, Args, Ctx)
+  when is_list(Params), is_tuple(Body), is_list(CloEnv) ->
+    case length(Params) =:= length(Args) of
+        true  -> interp(Body, extend_env(Params, Args, CloEnv));
+        false -> interp_error(Ctx, "wrong arity")
+    end;
+apply_value(NonFun, _Args, Ctx) ->
+    interp_error(Ctx, io_lib:format("attempt to apply non-function: ~p", [NonFun])).
+
+top_interp(Expr) ->
+    serialize(interp(Expr, top_env())).
+
+%% END OF PART 3
 
 %% lookup : atom() * Env -> Value | no_match
 %% Look up the value of a variable in the environment.
