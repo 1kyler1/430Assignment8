@@ -352,3 +352,57 @@ serialize_closure_test() ->
 
 serialize_primitive_test() ->
     "#<primop>" = serialize(make_prim(add, 2)).
+
+
+ %% Integration tests (top_interp)
+
+top_interp_num_test() ->
+    ?assertEqual("42", top_interp(numC(42))).
+
+top_interp_str_test() ->
+    ?assertEqual("\"hello\"", top_interp(strC("hello"))).
+
+top_interp_bool_test() ->
+    ?assertEqual("true",  top_interp(idC(true))),
+    ?assertEqual("false", top_interp(idC(false))).
+
+top_interp_add_test() ->
+    ?assertEqual("3", top_interp(appC(idC(add), [numC(1), numC(2)]))).
+
+top_interp_nested_arith_test() ->
+    %% (+ (* 2 3) (- 10 4)) => 12
+    ?assertEqual("12", top_interp(
+        appC(idC(add), [
+            appC(idC(mul), [numC(2), numC(3)]),
+            appC(idC(sub), [numC(10), numC(4)])
+        ]))).
+
+top_interp_if_test() ->
+    ?assertEqual("1", top_interp(ifC(idC(true),  numC(1), numC(2)))),
+    ?assertEqual("2", top_interp(ifC(idC(false), numC(1), numC(2)))).
+
+top_interp_if_non_bool_test() ->
+    ?assertError(_, top_interp(ifC(numC(1), numC(2), numC(3)))).
+
+top_interp_lambda_test() ->
+    %% ((fun (x) => (+ x 1)) 5) => 6
+    ?assertEqual("6", top_interp(
+        appC(lamC([x], appC(idC(add), [idC(x), numC(1)])),
+             [numC(5)]))).
+
+top_interp_closure_captures_env_test() ->
+    %% ((fun (x) => (fun (y) => (+ x y))) 3) applied to 4 => 7
+    Expr = appC(
+               appC(lamC([x], lamC([y], appC(idC(add), [idC(x), idC(y)]))),
+                    [numC(3)]),
+               [numC(4)]),
+    ?assertEqual("7", top_interp(Expr)).
+
+top_interp_wrong_arity_test() ->
+    ?assertError(_, top_interp(appC(lamC([x], idC(x)), [numC(1), numC(2)]))).
+
+top_interp_free_id_test() ->
+    ?assertError(_, top_interp(idC(unbound_var))).
+
+top_interp_div_by_zero_test() ->
+    ?assertError(_, top_interp(appC(idC('div'), [numC(1), numC(0)]))).
